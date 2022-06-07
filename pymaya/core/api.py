@@ -1,17 +1,11 @@
 from types import StringTypes
 from abc import ABCMeta, abstractmethod
 
+from pymaya.py2x3 import _enum, xrange, add_metaclass
 from maya.api import OpenMaya as om2
 import pymaya.core.utilities as utils
 import pymaya.apiundo as apiundo
 
-# Python V2 / V3 Compatibility
-if utils.pyVersion == 2:
-    _enum = object
-else:
-    from enum import Enum
-    _enum = Enum
-    xrange = range
 
 @utils.timeit(name='ToApiObject', log=True, verbose=False)
 def toApiObject(nodeName):
@@ -38,29 +32,22 @@ def toApiObject(nodeName):
         try:
             dag = sel.getDagPath(0)
             return dag
-        except RuntimeError:
+        except TypeError:
             obj = sel.getDependNode(0)
             return obj
 
 
-class ApiUndo(object):
-    """
-    Decorator to handle undoing & redoing API operations.
-    The function it decorates must return either an object with undoIt & doIt methods, or None
-    """
-    def __init__(self, func):
-        self._func = func
-
-    def __call__(self, *args, **kwargs):
-        result = self._func(*args, **kwargs)
-
+def apiUndo(func):
+    def wrapped(*args, **kwargs):
+        result = func(*args, **kwargs)
         if result is not None:
             apiundo.commit(undo=result.undoIt, redo=result.doIt)
         return result
+    return wrapped
 
 
+@add_metaclass(ABCMeta)
 class AbstractModifier(object):
-    __metaclass__ = ABCMeta
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.doIt()
@@ -72,6 +59,41 @@ class AbstractModifier(object):
     @abstractmethod
     def undoIt(self):
         pass
+
+
+class ProxyModifier(AbstractModifier):
+    def __init__(self, doFunc, doArgs=None, doKwargs=None, undoFunc=None, undoArgs=None, undoKwargs=None):
+        self._doIt = doFunc
+        if undoFunc is None:
+            self._undoIt = self._doIt
+        else:
+            self._undoIt = undoFunc
+
+        if doArgs is None:
+            self._doArgs = ()
+        else:
+            self._doArgs = doArgs
+
+        if undoArgs is None:
+            self._undoArgs = ()
+        else:
+            self._undoArgs = undoArgs
+
+        if doKwargs is None:
+            self._doKwargs = {}
+        else:
+            self._doKwargs = doKwargs
+
+        if undoKwargs is None:
+            self._undoKwargs = {}
+        else:
+            self._undoKwargs = undoKwargs
+
+    def doIt(self):
+        return self._doIt(*self._doArgs, **self._doKwargs)
+
+    def undoIt(self):
+        return self._undoIt(*self._undoArgs, **self._undoKwargs)
 
 
 class DGModifier(AbstractModifier):
@@ -140,6 +162,12 @@ class DGModifier(AbstractModifier):
         mobj = data.create(value)
         self.modifier.newPlugValue(plug, mobj)
 
+    def createNode(self, nodeType, name=None):
+        mobj = self.modifier.createNode(nodeType)
+        if name is not None:
+            self.modifier.renameNode(mobj, name)
+        return mobj
+
     def doIt(self):
         return self.modifier.doIt()
 
@@ -178,11 +206,18 @@ class DGModifier(AbstractModifier):
         self.modifier.disconnect(sPlug, dPlug)
 
 
-class DagModifier(object):
+class DagModifier(DGModifier):
     MModifier = om2.MDagModifier
+
+    def createNode(self, nodeType, name=None, parent=om2.MObject.kNullObj):
+        mobj = self.modifier.createNode(nodeType, parent=parent)
+        if name is not None:
+            self.modifier.renameNode(mobj, name)
+        return mobj
 
 
 class DataType(_enum):
+    INVALID = 0
     DISTANCE = 1
     ANGLE = 2
     BOOL = 3
@@ -197,6 +232,9 @@ class DataType(_enum):
     MATRIX = 12
     ENUM = 13
     TIME = 14
+    MESSAGE = 15
+    POINT = 16
+    COLOR = 17
 
     @classmethod
     def fromMObject(cls, MObject):
@@ -237,6 +275,9 @@ class DataType(_enum):
         elif apiType == om2.MFn.kTimeAttribute:
             return cls.TIME
 
+        elif apiType == om2.MFn.kMessageAttribute:
+            return cls.MESSAGE
+
     @classmethod
     def fromNumericAttr(cls, numAttr):
         apiType = numAttr.numericType()
@@ -270,6 +311,13 @@ class DataType(_enum):
         return result
 
     @classmethod
+    def toEuler(cls, value, order=om2.MEulerRotation.kXYZ):
+        assert len(value) == 3, 'Value must be a sequence of 3 floats'
+        comp = [cls.toAngle(v).asRadians() for v in value]
+        comp.append(order)
+        return om2.MEulerRotation(*comp)
+
+    @classmethod
     def toTime(cls, value, unit=om2.MTime.uiUnit()):
         result = om2.MTime(value, unit)
         return result
@@ -289,6 +337,50 @@ class DataType(_enum):
     @classmethod
     def toString(cls, value):
         result = str(value)
+        return result
+
+    @classmethod
+    def toPoint(cls, value):
+        if isinstance(value, om2.MPoint):
+            return value
+        else:
+            return om2.MPoint(value)
+
+    @classmethod
+    def toVector(cls, value):
+        if isinstance(value, om2.MVector):
+            return value
+        else:
+            return om2.MVector(value)
+
+    @classmethod
+    def getNumericTypes(cls):
+        return cls.FLOAT, cls.FLOAT2, cls.FLOAT3, cls.FLOAT4, \
+               cls.INT, cls.INT2, cls.INT3, \
+               cls.BOOL
+
+    @classmethod
+    def getUnitTypes(cls):
+        return cls.DISTANCE, cls.ANGLE, cls.TIME
+
+    @classmethod
+    def _mAttrDataConstantDict(cls):
+        return {cls.DISTANCE: om2.MFnUnitAttribute.kDistance,
+                cls.ANGLE: om2.MFnUnitAttribute.kAngle,
+                cls.TIME: om2.MFnUnitAttribute.kTime,
+                cls.BOOL: om2.MFnNumericData.kBoolean,
+                cls.FLOAT: om2.MFnNumericData.kFloat,
+                cls.FLOAT2: om2.MFnNumericData.k2Float,
+                cls.FLOAT3: om2.MFnNumericData.k3Float,
+                cls.FLOAT4: om2.MFnNumericData.k4Double,
+                cls.INT: om2.MFnNumericData.kInt,
+                cls.INT2: om2.MFnNumericData.k2Int,
+                cls.INT3: om2.MFnNumericData.k3Int}
+
+    @classmethod
+    def asMAttrDataConstant(cls, constant):
+        dic = cls._mAttrDataConstantDict()
+        result = dic.get(constant)
         return result
 
 
@@ -332,8 +424,41 @@ def getPlugValue(plug, attrType=None, asString=False, context=om2.MDGContext.kNo
     elif attrType in (DataType.FLOAT2, DataType.FLOAT3, DataType.FLOAT4, DataType.INT2, DataType.INT3):
         value = [getPlugValue(plug.child(x), context=context) for x in xrange(plug.numChildren())]
         if attrType in (DataType.FLOAT3, DataType.INT3):
-            print plug, attrType, value
-        return om2.MVector(value)
+            return om2.MVector(value)
+        return value
 
-    elif attrType == DataType.MATRIX:
-        return om2.MMatrix(plug.asMObject(context))
+    elif attrType == DataType.MATRIX:       # FIXME: Matrix Doesn't work ! Gotta pass through a MFnMatrixData
+        mobj = plug.asMObject(context)
+        matrix = om2.MFnMatrixData(mobj).matrix()
+        return om2.MMatrix(matrix)
+
+    elif attrType == DataType.MESSAGE:
+        if plug.isDestination:
+            return plug.source().node()
+        else:
+            return None
+    else:
+        raise TypeError('Unsupported plug type')
+
+
+def sliceItemToMIntArray(item, array=None, inclusive=False):
+    if array is None:
+        array = om2.MIntArray()
+
+    if not isinstance(item, tuple):
+        item = [item]
+    for i in item:
+        if isinstance(i, int):
+            array.append(i)
+        elif isinstance(i, slice):
+            start = slice.start
+            stop = slice.stop
+            step = 1
+            if i.step is not None:
+                step = i.step
+            stop = i.stop
+            if inclusive:
+                stop += 1
+            for x in xrange(i.start, stop, step):
+                array.append(x)
+    return array

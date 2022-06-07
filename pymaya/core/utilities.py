@@ -1,10 +1,6 @@
 import time
 from maya.api import OpenMaya as om2
-import maya.cmds as cmds
 from collections import OrderedDict
-import sys
-
-pyVersion = sys.version_info[0]
 
 
 def timeit(name='timer', log=False, verbose=True):
@@ -81,6 +77,9 @@ class Iterator(object):
         self._isDone = False
         self.n = 0
 
+    def __len__(self):
+        return len(self.data)
+
     def __iter___(self):
         self.n = 0
         return self
@@ -101,3 +100,13 @@ class Iterator(object):
 
     def currentItem(self):
         return self.data[self.n]
+
+    def currentIndex(self):
+        return self.n
+
+
+def prodList(lst):
+    count = 1
+    for n in lst:
+        count *= n
+    return count
