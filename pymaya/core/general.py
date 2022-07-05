@@ -10,150 +10,31 @@ import pymaya.core.utilities as utils
 from abc import ABCMeta, abstractmethod
 
 
-@add_metaclass(ABCMeta)
-class PyObjectBuilder(object):
-    """
-    Abstract PyObject Builder
-    """
+class UndoChunk(object):
+    def __init__(self, name=None):
+        self._name = name
 
-    @classmethod
-    @abstractmethod
-    def create(cls, *args, **kwargs):
-        """
-        possible inputs:
-        string > pass intoApiObject then back into PyObject
-        tuple (MDagPath, MObject) > Component
-        MDagPath > DagNode
-        MObject > DependNode
-        MPlug > Attribute
-        """
-        pass
-
-    @classmethod
-    @utils.timeit(name='FromString', log=True, verbose=False)
-    def _fromString(cls, *args, **kwargs):
-        """
-        Attempts to convert a string into and api object 
-        """
-        if not len(args):
-            return None
-
-        return api.toApiObject(args[0])
-
-    @classmethod
-    @utils.timeit(name='ProcessInput', log=True, verbose=False)
-    def _processInput(cls, *args, **kwargs):
-        if not len(args) and not len(kwargs):
-            raise ValueError('create method needs at least one keyword or non-keyword argument')
-
-        if len(args):
-            obj = args[0]
-            out = {}
-            if isinstance(obj, (unicode, str)):
-                obj = cls._fromString(obj)
-                if obj is None:
-                    raise ValueError('Unable to find API object for {}'.format(args[0]))
-
-            if isinstance(obj, om2.MObject):
-                out['MObjectHandle'] = om2.MObjectHandle(obj)
-            elif isinstance(obj, om2.MObjectHandle):
-                out['MObjectHandle'] = obj
-            elif isinstance(obj, om2.MPlug):
-                out['MPlug'] = obj
-            elif isinstance(obj, om2.MDagPath):
-                out['MDagPath'] = obj
-            elif isinstance(obj, tuple):
-                if isinstance(obj[0], om2.MDagPath) and (obj[1], om2.MObject):
-                    out['MDagPath'] = obj[0]
-                    out['MObjectHandle'] = om2.MObjectHandle(obj[1])
-                else:
-                    raise ValueError('Unrecognized tuple composition')
-            else:
-                raise ValueError('Unrecognized input {} of type {}'.format(obj, type(obj)))
-
-            return out
+    def __enter__(self):
+        if self._name:
+            cmds.undoInfo(openChunk=1, chunkName=self._name)
         else:
-            return kwargs
+            cmds.undoInfo(openChunk=1)
 
-
-# --- OBSOLETE --- #
-class AttributeBuilder(PyObjectBuilder):
-
-    @classmethod
-    def create(cls, *args, **kwargs):
-        super(AttributeBuilder, cls).create(*args, **kwargs)
-        apiDict = cls._processInput(*args, **kwargs)
-        return Attribute(**apiDict)
-
-
-class ComponentBuilder(PyObjectBuilder):
-
-    @classmethod
-    def create(cls, *args, **kwargs):
-        super(ComponentBuilder, cls).create(*args, **kwargs)
-        apiDict = cls._processInput(*args, **kwargs)
-        return Component(**apiDict)
-
-
-class DependNodeBuilder(PyObjectBuilder):
-
-    @classmethod
-    def create(cls, *args, **kwargs):
-        super(DependNodeBuilder, cls).create(*args, **kwargs)
-        apiDict = cls._processInput(*args, **kwargs)
-
-        if 'MDagPath' in apiDict:
-            dag = apiDict['MDagPath']
-            if dag.hasFn(om2.MFn.kTransform):
-                return Transform(**apiDict)
-            elif dag.hasFn(om2.MFn.kMesh):
-                return Mesh(**apiDict)
-            elif dag.hasFn(om2.MFn.kNurbsCurve):
-                return NurbsCurve(**apiDict)
-            elif dag.hasFn(om2.MFn.kNurbsSurface):
-                return NurbsSurface(**apiDict)
-            elif dag.hasFn(om2.MFn.kLattice):
-                return LatticeShape(**apiDict)
-            else:
-                return DagNode(**apiDict)
-        elif 'MObjectHandle' in apiDict:
-            return DependNode(**apiDict)
-
-    @classmethod
-    @utils.timeit(name='ProcessInputNode', log=True, verbose=False)
-    def _processInput(cls, *args, **kwargs):
-        if not len(args) and not len(kwargs):
-            raise ValueError('create method needs at least one keyword or non-keyword argument')
-
-        if len(args):
-            obj = args[0]
-            out = {}
-            if isinstance(obj, (unicode, str)):
-                try:
-                    sel = om2.MSelectionList()
-                    sel.add(obj)
-                except RuntimeError:
-                    raise ValueError('Unable to find API object for {}'.format(args[0]))
-                else:
-                    obj = sel.getDependNode(0)
-
-            if isinstance(obj, om2.MObject):
-                out['MObjectHandle'] = om2.MObjectHandle(obj)
-            elif isinstance(obj, om2.MObjectHandle):
-                out['MObjectHandle'] = obj
-            else:
-                raise ValueError('DependNodeBuilder.create *args only accepts string, MObject or MObjectHandle')
-
-            if obj.hasFn(om2.MFn.kDagNode):
-                out['MDagPath'] = om2.MDagPath.getAPathTo(obj)
-            return out
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._name:
+            cmds.undoInfo(closeChunk=1, chunkName=self._name)
         else:
-            if 'MDagPath' not in kwargs:
-                obj = kwargs['MObjectHandle'].object()
-                if obj.hasFn(om2.MFn.kDagNode):
-                    kwargs['MDagPath'] = om2.MDagPath.getAPathTo(obj)
-            return kwargs
-# ---------------- #
+            cmds.undoInfo(closeChunk=1)
+
+
+def undoChunk(name=None):
+    def undoDecorator(func):
+        def wrapper(*args, **kwargs):
+            with UndoChunk(name=name):
+                result = func(*args, **kwargs)
+            return result
+        return wrapper
+    return undoDecorator
 
 
 class PyObjectFactory(object):
@@ -231,11 +112,9 @@ class PyObjectFactory(object):
             return _class(**kwargs)
 
     @classmethod
-    def fromMSelectionList(cls, sel, filter=None):
+    def fromMSelectionList(cls, sel):
         it = om2.MItSelectionList(sel)
         result = []
-        if filter is not None:
-            it.setFilter(filter)
         while not it.isDone():
             iType = it.itemType()
             if iType == it.kDNselectionItem:
@@ -720,6 +599,8 @@ def connectAttr(sAttr, dAttr, force=False, nextAvailable=False, **kwargs):
         doIt = True
 
     sPlug = _processAttrInput(sAttr)
+    if sPlug.isArray and sPlug.attribute().hasFn(om2.MFn.kTypedAttribute) and not sPlug.isDynamic:
+        sPlug = sPlug.elementByLogicalIndex(0)
     dPlug = _processAttrInput(dAttr)
     modifier.connect(sPlug=sPlug, dPlug=dPlug, force=force, nextAvailable=nextAvailable)
 
@@ -920,6 +801,69 @@ def selected():
     return PyObjectFactory.fromMSelectionList(sel)
 
 
+def listType(nodeType, asApi=False):
+    sel = om2.MSelectionList()
+    it = om2.MItDependencyNodes(nodeType)
+    while not it.isDone():
+        sel.add(it.thisNode())
+        it.next()
+
+    if asApi:
+        return sel
+
+    return PyObjectFactory.fromMSelectionList(sel)
+
+
+def ls(*args, **kwargs):
+    ls = cmds.ls(*args, **kwargs)
+    it = utils.Iterator(ls)
+    result = []
+    while not it.isDone():
+        node = it.currentItem()
+        result.append(PyObjectFactory(node))
+        it.next()
+    return result
+
+
+def doDelete(*args, **kwargs):
+    if not len(args):
+        args = selected()
+
+    it = utils.Iterator(args)
+
+    multMod = api.MultiModifier()
+    while not it.isDone():
+        item = it.currentItem()
+        if not isinstance(item, PyObject):
+            item = PyObjectFactory(item)
+
+        handle = item.apimobjecthandle()
+        if handle.isValid():
+            modifier = om2.MDGModifier()
+            modifier.deleteNode(handle.object())
+            modifier.doIt()
+            multMod.append(modifier)
+        it.next()
+
+    api.apiundo.commit(undo=multMod.undoIt, redo=multMod.doIt)
+
+
+uniqueObjExists = utils.uniqueObjExists
+
+
+def objExists(obj):
+    if isinstance(obj, (str, unicode)):
+        return uniqueObjExists(obj)
+
+    if isinstance(obj, PyObject):
+        handle = obj.apimobjecthandle()
+        return handle.isValid()
+
+    if isinstance(obj, om2.MObject):
+        return om2.MObjectHandle(obj).isValid()
+
+    raise TypeError('objExists accepts 3 types of inputs : string, PyObject and MObject')
+
 @api.apiUndo
 def transform(node, translate=None, rotate=None, scale=None, shear=None, matrix=None, relative=False, worldSpace=False, objectSpace=False, _modifier=None):
     if not isinstance(node, Transform):
@@ -1109,12 +1053,19 @@ class PyObject(object):
     def __str__(self):
         return self.name()
 
+    @property
+    def __melnode___(self):
+        return cmds.nodeType(self.name(fullDagPath=True))
+
     @abstractmethod
     def apimfn(self):
         pass
 
     def apimobject(self):
         return self.__apiInput__['MObjectHandle'].object()
+
+    def apimobjecthandle(self):
+        return self.__apiInput__['MObjectHandle']
 
     @abstractmethod
     def name(self, fullDagPath=False):
@@ -1147,7 +1098,9 @@ class Attribute(PyObject):
         self._attrType = None
 
     def __getitem__(self, item):
-        return Attribute(MPlug=self.apimplug().elementByLogicalIndex(item), node=self._node)
+        newPlug = self.apimplug().elementByLogicalIndex(item)
+        mobjHandle = om2.MObjectHandle(newPlug.attribute())
+        return PyObjectFactory(MPlug=newPlug, MObjectHandle=mobjHandle, node=self._node)
 
     def __getattr__(self, item):
         attr = self._buildAttr(item)
@@ -1200,8 +1153,9 @@ class Attribute(PyObject):
 
     def node(self):
         if self._node is None:
-            builder = DependNodeBuilder()
-            self._node = builder.create(self.apimplug().node())
+            # FIXME: use PyObjectFactory instead
+            handle = om2.MObjectHandle(self.apimplug().node())
+            self._node = PyObjectFactory(MObjectHandle=handle)
         return self._node
 
     def set(self, *args, **kwargs):
@@ -1214,6 +1168,22 @@ class Attribute(PyObject):
             kwargs['_datatype'] = self._attrType
         return getAttr(self, **kwargs)
 
+    def connect(self, dAttr, force=False, nextAvailable=False, **kwargs):
+        return connectAttr(sAttr=self, dAttr=dAttr, force=force, nextAvailable=nextAvailable, **kwargs)
+
+    def disconnect(self, *args, **kwargs):
+        args = list(args)
+        args.insert(0, self)
+        return disconnectAttr(*args, **kwargs)
+
+    def rename(self, name, shortName=False):
+        mfn = self.apimfn()
+        if shortName:
+            mfn.shortName = name
+        else:
+            mfn.name = name
+
+    # PARENT & CHILD
     def _buildAttr(self, name):
         node = self.node()
         nodemfn = node.apimfn()
@@ -1222,7 +1192,8 @@ class Attribute(PyObject):
         if mplug is None:
             return None
         mplug = apimplug.child(mplug.attribute())
-        attr = Attribute(MPlug=mplug, node=node, parent=self)
+        attr = PyObjectFactory(MPlug=mplug, MObjectHandle=om2.MObjectHandle(mplug.attribute()), node=node, parent=self,
+                               objectType=PyObjectFactory.ATTRIBUTE)
         return attr
 
     def attr(self, name):
@@ -1233,14 +1204,9 @@ class Attribute(PyObject):
             return self._parent
         mplug = self.apimplug()
         parentPlug = mplug.parent()
-        return Attribute(MPlug=parentPlug, node=self.node())
-
-    def rename(self, name, shortName=False):
-        mfn = self.apimfn()
-        if shortName:
-            mfn.shortName = name
-        else:
-            mfn.name = name
+        parentObj = parentPlug.attribute()
+        return PyObjectFactory(MPlug=parentPlug, MObjectHandle=om2.MObjectHandle(parentObj), node=self.node(),
+                               objectType=PyObjectFactory.ATTRIBUTE)
 
     @recycle_mplug
     def isFreeToChange(self, **kwargs):
@@ -1294,6 +1260,26 @@ class Attribute(PyObject):
         mplug = kwargs['mplug']
         oldValue = self.isDisplayable(mplug=mplug)
         modifier = api.ProxyModifier(doFunc=self._setDisplayable, doKwargs={'value': value, 'mplug': mplug},
+                                     undoKwargs={'value': oldValue, 'mplug': mplug})
+        modifier.doIt()
+        return modifier
+
+    @recycle_mplug
+    def isLocked(self, **kwargs):
+        mplug = kwargs['mplug']
+        return mplug.isLocked
+
+    @recycle_mplug
+    def _setLocked(self, value, **kwargs):
+        mplug = kwargs['mplug']
+        mplug.isLocked = value
+
+    @api.apiUndo
+    @recycle_mplug
+    def setLocked(self, value, **kwargs):
+        mplug = kwargs['mplug']
+        oldValue = mplug.isLocked
+        modifier = api.ProxyModifier(doFunc=self._setLocked, doKwargs={'value': value, 'mplug': mplug},
                                      undoKwargs={'value': oldValue, 'mplug': mplug})
         modifier.doIt()
         return modifier
@@ -1516,8 +1502,9 @@ class DependNode(PyObject):
     def _buildAttr(self, name):
         apimfn = self.apimfn()
         if apimfn.hasAttribute(name):
-            attr = PyObjectFactory(MPlug=apimfn.findPlug(name, False), node=self, objectType=PyObjectFactory.ATTRIBUTE)
-            #attr = Attribute(MPlug=apimfn.findPlug(name, False), node=self)
+            plug = apimfn.findPlug(name, False)
+            attr = PyObjectFactory(MPlug=plug, MObjectHandle=om2.MObjectHandle(plug.attribute()), node=self,
+                                   objectType=PyObjectFactory.ATTRIBUTE)
             return attr
         else:
             return None
@@ -1529,9 +1516,13 @@ class DependNode(PyObject):
         """
         Create a new attribute on this node. See AttrCreator for parameters 
         :param _modifier: an optional DGModifier for this operation. If one is provided, doIt won't be called
+        :param parent: optional parent compound attribute
+        :type parent: MObject, CompoundAttribute, MFnCompoundAttribute, string
         :return: The attribute created
         :rtype: Attribute
         """
+
+        # Checking if a modifier was passed in kwargs
         modifier = kwargs.pop('_modifier', None)
         parent = kwargs.pop('parent', None)
         if modifier is None:
@@ -1540,41 +1531,77 @@ class DependNode(PyObject):
         else:
             doIt = False
 
+        # Creating a new MFnAttribute
         attr = AttrCreator(*args, **kwargs)
+        attrObj = attr.object()
+
         names = (attr.name, attr.shortName)
         for n in names:
             if self.hasAttr(n) or hasattr(self, n):
                 raise NameError('name {} already used'.format(n))
 
+        # If the new attribute is a compound attribute, we don't add it to the node and just return the MFn. The user
+        # will have to call DependNode.addMfnAttribute for that, as adding an empty compound crashes maya
         if isinstance(attr, om2.MFnCompoundAttribute):
             if not attr.numChildren():
-                obj = attr.object()
-                return CompoundAttribute(MPlug=om2.MPlug(obj), MObjectHandle=om2.MObjectHandle(obj), node=self)
+                return attr
 
+        # If an attribute is passed in parent, we check if the parent exists on this node. If yes, we add the
+        # new attribute to this node before adding it as a child of the parent attr, else we just add it directly
+        # to the attr as a child
+
+        doAdd = True
+        parentMfn = None
         if parent is not None:
-            if isinstance(parent, om2.MObject):
-                mfn = om2.MFnCompoundAttribute(parent)
+            if isinstance(parent, om2.MFnCompoundAttribute):
+                parentMfn = parent
+            elif isinstance(parent, om2.MObject):
+                parentMfn = om2.MFnCompoundAttribute(parent)
             elif isinstance(parent, CompoundAttribute):
-                mfn = parent.apimfn()
+                parentMfn = parent.apimfn()
             elif isinstance(parent, (str, unicode)):
                 if self.hasAttr(parent):
                     parent = self.attr(parent)
-                    mfn = parent.apimfn()
+                    parentMfn = parent.apimfn()
+                else:
+                    raise ValueError('{} does not have an attribute named {}'.format(self.name, parent))
             else:
                 raise TypeError('Accepted types for "parent" are MObject, CompoundAttribute, string')
 
-            mfn.addChild(attr)
-            obj = attr.object()
-            return PyObjectFactory(MPlug=om2.MPlug(obj), MObjectHandle=om2.MObjectHandle(obj),
+            if not self.hasAttr(parent.name):
+                doAdd = False
+
+        newAttr = None
+        if doAdd:
+            newAttr = self.addMfnAttribute(attr, _modifier=modifier)
+            if doIt:
+                modifier.doIt()
+                api.apiundo.commit(undo=modifier.undoIt, redo=modifier.doIt)
+
+        if parentMfn is not None:
+            parentMfn.addChild(attr.object())
+
+        if newAttr:
+            return newAttr
+        else:
+            mplug = om2.MPlug(self.apimobject(), attrObj)
+            return PyObjectFactory(MPlug=mplug, MObjectHandle=om2.MObjectHandle(attrObj),
                                    objectType=PyObjectFactory.ATTRIBUTE)
 
-        modifier.addAttribute(attr.object())
+    def addMfnAttribute(self, attr, _modifier=None):
+        if _modifier is None:
+            modifier = api.DGModifier()
+            doIt = True
+        else:
+            modifier = _modifier
+            doIt = False
 
+        modifier.addAttribute(self.apimobject(), attr.object())
         if doIt:
             modifier.doIt()
             api.apiundo.commit(undo=modifier.undoIt, redo=modifier.doIt)
 
-        return self.attr(attr.name)
+            return self.attr(attr.name)
 
     @classmethod
     def _create(cls, nodeType, name=None):
@@ -1610,6 +1637,26 @@ class DependNode(PyObject):
         else:
             return obj
 
+    @recycle_mfn
+    def isLocked(self, **kwargs):
+        mfn = kwargs['mfn']
+        return mfn.isLocked
+
+    @recycle_mfn
+    def _setLocked(self, value, **kwargs):
+        mfn = kwargs['mfn']
+        mfn.isLocked = value
+
+    @api.apiUndo
+    @recycle_mfn
+    def setLocked(self, value, **kwargs):
+        mfn = kwargs['mfn']
+        oldValue = mfn.isLocked
+        modifier = api.ProxyModifier(doFunc=self._setLocked, doKwargs={'value': value, 'mfn': mfn},
+                                     undoKwargs={'value': oldValue, 'mfn': mfn})
+        modifier.doIt()
+        return modifier
+
 
 class DagNode(DependNode):
     _mfnClass = om2.MFnDagNode
@@ -1617,6 +1664,8 @@ class DagNode(DependNode):
 
     def __init__(self, *args, **kwargs):
         super(DagNode, self).__init__(*args, **kwargs)
+        if 'MDagPath' not in self.__apiInput__:
+            self.__apiInput__['MDagPath'] = om2.MDagPath.getAPathTo(self.apimobject())
 
     # API RELATED METHODS
     def apimfn(self):
@@ -1717,7 +1766,7 @@ class Transform(DagNode):
         sel = om2.MSelectionList()
         sel.add(dag)
         objHandle = om2.MObjectHandle(sel.getDependNode(0))
-        return DependNodeBuilder.create(MObjectHandle=objHandle, MDagPath=dag)
+        return PyObjectFactory(MObjectHandle=objHandle, MDagPath=dag)
 
     def _buildAttr(self, name, checkShape=True):
         attr = super(DagNode, self)._buildAttr(name=name)
@@ -3305,6 +3354,15 @@ class ComponentPoint(Component):
 
     def _postSetPositions(self, *args, **kwargs):
         self._postSetPosition(*args, **kwargs)
+
+    def getBoundingBox(self, space=om2.MSpace.kObject):
+        bbox = om2.MBoundingBox()
+        it = self.apimit()
+        while not it.isDone():
+            bbox.expand(it.position(space=space))
+            it.next()
+        return bbox
+        
 
 
 class Component1D(Component):

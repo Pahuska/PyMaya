@@ -124,7 +124,7 @@ class DGModifier(AbstractModifier):
         # Handle Compounds
         if plug.isCompound:
             numChildren = plug.numChildren()
-            if len(value) == numChildren:
+            if len(value) >= numChildren:
                 for x in xrange(numChildren):
                     self.setPlugValue(plug.child(x), value[x])
             else:
@@ -214,6 +214,32 @@ class DagModifier(DGModifier):
         if name is not None:
             self.modifier.renameNode(mobj, name)
         return mobj
+
+
+class MultiModifier(AbstractModifier):
+    def __init__(self, *args):
+        self.modifiers = list(args)
+
+    def append(self, modifier):
+        self.modifiers.append(modifier)
+
+    def extend(self, iterable):
+        self.modifiers.extend(iterable)
+
+    def getIterator(self):
+        return utils.Iterator(self.modifiers)
+
+    def doIt(self):
+        it = self.getIterator()
+        while not it.isDone():
+            it.currentItem().doIt()
+            it.next()
+
+    def undoIt(self):
+        it = self.getIterator()
+        while not it.isDone():
+            it.currentItem().undoIt()
+            it.next()
 
 
 class DataType(_enum):
