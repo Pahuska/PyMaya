@@ -1053,6 +1053,12 @@ class PyObject(object):
     def __str__(self):
         return self.name()
 
+    def __eq__(self, other):
+        if isinstance(other, PyObject):
+            return self.apimobject() == other.apimobject()
+        else:
+            return NotImplemented
+
     @property
     def __melnode___(self):
         return cmds.nodeType(self.name(fullDagPath=True))
@@ -1969,7 +1975,7 @@ class ObjectSet(DependNode):
         """
         if not isinstance(members, om2.MSelectionList):
             members = self._processList(members)
-        self.apimfn().addMembers(members)
+        self.apimfn().removeMembers(members)
         return members
 
     def isMember(self, member):
@@ -3055,11 +3061,19 @@ class Component(PyObject):
         mfn.create(self._mfnConstant)
         mfn.addElements(self._extractElement(item))
         comp = self.__class__(MDagPath=self.apidagpath(), MObjectHandle=om2.MObjectHandle(mfn.object()),
-                              node=self.node)
+                              node=self.node())
         return comp
 
     def __len__(self):
         return self.apimfn().elementCount
+
+    def __eq__(self, other):
+        if isinstance(other, PyObject):
+            return self.apimfn().isEqual(other.apimobject())
+        elif isinstance(other, om2.MObject):
+            return self.apimfn().isEqual(other)
+        else:
+            return NotImplemented
 
     @abstractmethod
     def _extractElement(self, item):
@@ -3135,7 +3149,7 @@ class Component(PyObject):
 
     def node(self):
         if self._node is None:
-            self._node = DependNode.create(MDagPath=self.apidagpath(), MObjectHandle=om2.MObjectHandle(self.apidagpath().node()))
+            self._node = PyObjectFactory(MDagPath=self.apidagpath(), MObjectHandle=om2.MObjectHandle(self.apidagpath().node()))
         return self._node
 
 
@@ -3363,7 +3377,6 @@ class ComponentPoint(Component):
             it.next()
         return bbox
         
-
 
 class Component1D(Component):
     _mfnClass = om2.MFnSingleIndexedComponent
