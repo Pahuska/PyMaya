@@ -7,10 +7,6 @@ import pymaya.core.general as pm
 import pymaya.core.api as api
 import pymaya.core.utilities as utils
 
-reload(pm)
-reload(api)
-reload(utils)
-
 
 class UserTransform(pm.Transform):
     NODE_TYPE = 'UserTransform'

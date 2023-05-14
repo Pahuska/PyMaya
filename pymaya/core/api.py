@@ -1,4 +1,3 @@
-from types import StringTypes
 from abc import ABCMeta, abstractmethod
 
 from pymaya.py2x3 import _enum, xrange, add_metaclass
@@ -145,7 +144,7 @@ class DGModifier(AbstractModifier):
                 value = DataType.toDistance(value)
             self.modifier.newPlugValueMDistance(plug, value)
         elif datatype == DataType.STRING:
-            if not isinstance(value, (str, unicode)):
+            if not isinstance(value, str):
                 value = DataType.toString(value)
             self.modifier.newPlugValueString(plug, value)
         elif datatype == DataType.MATRIX:

@@ -38,7 +38,7 @@ class Timer:
             self.resultDic[self.name] += self.interval
 
         if self.verbose:
-            print self.name, ':', self.interval
+            print(self.name, ':', self.interval)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.timeit()
@@ -46,7 +46,7 @@ class Timer:
     @classmethod
     def printDic(cls, clear=False):
         for k, v in cls.resultDic.items():
-            print '{} : {}'.format(k, v)
+            print('{} : {}'.format(k, v))
         if clear:
             cls.clearDic()
 

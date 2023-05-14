@@ -6,10 +6,6 @@ import pymaya.core.general as pm
 import pymaya.core.api as api
 import pymaya.core.utilities as utils
 
-reload(pm)
-reload(api)
-reload(utils)
-
 from pymaya.core.api import DataType as dt
 
 

@@ -50,11 +50,11 @@ class PyObjectFactory(object):
         :param args: The object that will be translated as a PyObject (Optional)
         :type args: str, MDagPath, MObject, MObjectHandle, MPlug, tuple(MDagPath, MObject)
         
-        :keyword MDagPath: an MDagPath to an object to be translated (Optional)
+        :keyword MDagPath: an MDagPath to an object(Optional)
         :type MDagPath: MDagPath
-        :keyword MObject: an MObject that represents the object to be translated (Optional)
+        :keyword MObject: an MObject that represents the object(Optional)
         :type MObject: MObject
-        :keyword MObjectHandle: an MObjectHandle that represents the object to be translated (Optional)
+        :keyword MObjectHandle: an MObjectHandle that represents the object(Optional)
         :type MObjectHandle: MObjectHandle
         :return: The PyObject subclass that represent the given object
         :rtype: PyObject
@@ -63,7 +63,7 @@ class PyObjectFactory(object):
 
         if len(args) == 1:
             arg = args[0]
-            if isinstance(arg, (str, unicode)):
+            if isinstance(arg, str):
                 return PyObjectFactory(api.toApiObject(arg), **kwargs)
             else:
                 dic = {}
@@ -113,38 +113,38 @@ class PyObjectFactory(object):
 
     @classmethod
     def fromMSelectionList(cls, sel):
+        """
+        Converts an API MSelectionList into a list of PyObjects
+        
+        :param sel: the list to be converted
+         :type sel: MSelectionList
+         
+        :return: a list of PyObjects
+        :rtype: list
+        """
         it = om2.MItSelectionList(sel)
         result = []
         while not it.isDone():
             iType = it.itemType()
             if iType == it.kDNselectionItem:
                 mobj = it.getDependNode()
-                # _class = cls.classFromApiObject(mobj, cls.DEPENDNODE)
-                # kwargs = {'MObjectHandle': om2.MObjectHandle(mobj)}
                 instance = cls(MObjectHandle=om2.MObjectHandle(mobj), objectType=cls.DEPENDNODE)
                 result.append(instance)
             elif iType == it.kDagSelectionItem:
                 if it.hasComponents():
                     mdag, mobj = it.getComponent()
-                    # _class = cls.classFromApiObject(mobj, cls.COMPONENT)
-                    # kwargs = {'MDagPath': mdag, 'MObjectHandle': om2.MObjectHandle(mobj)}
                     instance = cls(MDagPath=mdag, MObjectHandle=om2.MObjectHandle(mobj), objectType=cls.COMPONENT)
                     result.append(instance)
                 else:
                     mdag = it.getDagPath()
-                    # _class = cls.classFromApiObject(mdag, cls.DAGNODE)
-                    # kwargs = {'MDagPath': mdag}
                     instance = cls(MDagPath=mdag, MObjectHandle=om2.MObjectHandle(mdag.node()), objectType=cls.DAGNODE)
                     result.append(instance)
             elif iType == it.kPlugSelectionItem:
                 mobj = it.getPlug()
-                # _class = cls.classFromApiObject(mobj, cls.ATTRIBUTE)
-                # kwargs = {'MObjectHandle': om2.MObjectHandle(mobj)}
                 instance = cls(MObjectHandle=om2.MObjectHandle(mobj), objectType=cls.ATTRIBUTE)
                 result.append(instance)
             else:
                 raise TypeError('Couldn\'t find PyObject class for {}'.format(it.getStrings()))
-            # result.append(_class(**kwargs))
             it.next()
         return result
 
@@ -206,7 +206,7 @@ class PyObjectFactory(object):
 
     @classmethod
     def classFromMFn(cls, mfn, typeScope=None):
-        assert typeScope in (cls.DAGNODE, cls.DEPENDNODE, cls.COMPONENT, cls.ATTRIBUTE)
+        assert typeScope in (None, cls.DAGNODE, cls.DEPENDNODE, cls.COMPONENT, cls.ATTRIBUTE)
 
         if typeScope is None:
             dic = cls._allTypes()
@@ -227,6 +227,14 @@ class PyObjectFactory(object):
 
     @classmethod
     def classFromApiObject(cls, apiObj, typeScope=None):
+        """
+        Get the proper class for the given object
+        :param apiObj: API Object
+        :type apiObj: MDagPath, MObject
+        :param typeScope: optional PyObjectFactory constant to restrict the search
+        :type typeScope: None, int
+        :return: the PyObject class for the api object
+        """
         assert isinstance(apiObj, (om2.MDagPath, om2.MObject))
         assert typeScope in (None, cls.DAGNODE, cls.DEPENDNODE, cls.COMPONENT, cls.ATTRIBUTE)
 
@@ -440,7 +448,7 @@ class AttrCreator(object):
 
 
 def _processAttrInput(attr):
-    if isinstance(attr, (unicode, str)):
+    if isinstance(attr, str):
         mplug = api.toApiObject(attr)
     elif isinstance(attr, Attribute):
         mplug = attr.apimplug()
@@ -852,7 +860,7 @@ uniqueObjExists = utils.uniqueObjExists
 
 
 def objExists(obj):
-    if isinstance(obj, (str, unicode)):
+    if isinstance(obj, str):
         return uniqueObjExists(obj)
 
     if isinstance(obj, PyObject):
@@ -863,6 +871,7 @@ def objExists(obj):
         return om2.MObjectHandle(obj).isValid()
 
     raise TypeError('objExists accepts 3 types of inputs : string, PyObject and MObject')
+
 
 @api.apiUndo
 def transform(node, translate=None, rotate=None, scale=None, shear=None, matrix=None, relative=False, worldSpace=False, objectSpace=False, _modifier=None):
@@ -1028,18 +1037,21 @@ class PyObject(object):
             newNode = cls._createVirtual(**kwargs)
             cls._postCreateVirtual(newNode, **postKwargs)
             kwargs = cls.getBuildDataFromName(newNode)
-            instance = super(PyObject, cls).__new__(cls, **kwargs)
+            #instance = super(PyObject, cls).__new__(cls, **kwargs)
+            instance = super(PyObject, cls).__new__(cls)
             instance.__apiInput__ = kwargs
         else:
             mobject = kwargs['MObjectHandle'].object()
             userCls = UserSubclassManager.getFromParentClass(cls)
             for uCls in userCls:
                 if uCls._isVirtual(mobject):
-                    instance = super(PyObject, cls).__new__(uCls, *args, **kwargs)
+                    #instance = super(PyObject, cls).__new__(uCls, *args, **kwargs)
+                    instance = super(PyObject, cls).__new__(uCls)
                     instance.__apiInput__ = kwargs
                     break
             else:
-                instance = super(PyObject, cls).__new__(cls, *args, **kwargs)
+                #instance = super(PyObject, cls).__new__(cls, *args, **kwargs)
+                instance = super(PyObject, cls).__new__(cls)
                 instance.__apiInput__ = kwargs
         return instance
 
@@ -1565,7 +1577,7 @@ class DependNode(PyObject):
                 parentMfn = om2.MFnCompoundAttribute(parent)
             elif isinstance(parent, CompoundAttribute):
                 parentMfn = parent.apimfn()
-            elif isinstance(parent, (str, unicode)):
+            elif isinstance(parent, str):
                 if self.hasAttr(parent):
                     parent = self.attr(parent)
                     parentMfn = parent.apimfn()
@@ -1999,7 +2011,7 @@ class ObjectSet(DependNode):
         self.apimfn().clear()
 
     def _processObject(self, obj):
-        if isinstance(obj, (str, unicode)):
+        if isinstance(obj, str):
             return self._processObject(api.toApiObject(obj))
         elif isinstance(obj, PyObject):
             return obj._getSelectableObject()
