@@ -240,7 +240,10 @@ class MultiModifier(AbstractModifier):
             it.currentItem().undoIt()
             it.next()
 
-
+# FIXME : Color and Point aren't recognize as such.
+#  Color can be fixed with usedAsColor property
+#  Point can't be fixed the same way so we'll probably have to stick to FLOAT3 instead and
+#  have a asPoint param somewhere in the attribute creation
 class DataType(_enum):
     INVALID = 0
     DISTANCE = 1
@@ -259,7 +262,7 @@ class DataType(_enum):
     TIME = 14
     MESSAGE = 15
     POINT = 16
-    COLOR = 17
+    COLOR = 16
 
     @classmethod
     def fromMObject(cls, MObject):
@@ -277,6 +280,9 @@ class DataType(_enum):
             return cls.FLOAT2
 
         elif apiType in [om2.MFn.kAttribute3Double, om2.MFn.kAttribute3Float]:
+            mfn = om2.MFnAttribute(MObject)
+            if mfn.usedAsColor:
+                return cls.COLOR
             return cls.FLOAT3
 
         elif apiType == om2.MFn.kAttribute4Double:
@@ -302,6 +308,8 @@ class DataType(_enum):
 
         elif apiType == om2.MFn.kMessageAttribute:
             return cls.MESSAGE
+        else:
+            return cls.INVALID
 
     @classmethod
     def fromNumericAttr(cls, numAttr):
@@ -352,6 +360,7 @@ class DataType(_enum):
         if isinstance(value, (list, tuple)):
             if len(value) == 4 and all([isinstance(x, (list, tuple)) for x in value]):
                 value = [item for sublist in value for item in sublist]     # flatten list of list
+                return om2.MMatrix(value)
             elif len(value) == 16:
                 return om2.MMatrix(value)
             else:
@@ -409,55 +418,62 @@ class DataType(_enum):
         return result
 
 
-def getPlugValue(plug, attrType=None, asString=False, context=om2.MDGContext.kNormal):
+def getPlugValue(plug, dataType=None, asString=False, context=om2.MDGContext.kNormal):
     if not isinstance(plug, om2.MPlug):
         raise TypeError('plug argument must be an MPlug, got {} instead'.format(type(plug)))
-    if attrType is None:
-        attrType = DataType.fromMObject(plug.attribute())
+    if plug.isCompound:
+        numChildren = plug.numChildren()
+        value = []
+        for x in range(numChildren):
+            value.append(getPlugValue(plug=plug.child(x), dataType=None, asString=asString, context=context))
+        return value
 
-    if attrType == DataType.DISTANCE:
+    if dataType is None:
+        dataType = DataType.fromMObject(plug.attribute())
+
+    if dataType == DataType.DISTANCE:
         d = plug.asMDistance(context)
         return d.asUnits(d.uiUnit())
 
-    elif attrType == DataType.ANGLE:
+    elif dataType == DataType.ANGLE:
         a = plug.asMAngle(context)
         return a.asUnits(a.uiUnit())
 
-    elif attrType == DataType.FLOAT:
+    elif dataType == DataType.FLOAT:
         return plug.asFloat(context)
 
-    elif attrType == DataType.BOOL:
+    elif dataType == DataType.BOOL:
         return plug.asBool(context)
 
-    elif attrType == DataType.INT:
+    elif dataType == DataType.INT:
         return plug.asInt(context)
 
-    elif attrType == DataType.ENUM:
+    elif dataType == DataType.ENUM:
         if asString:
             e = om2.MFnEnumAttribute(plug.attribute())
             return e.fieldName(plug.asInt(context))
         else:
             return plug.asInt(context)
 
-    elif attrType == DataType.STRING:
+    elif dataType == DataType.STRING:
         return plug.asString(context)
 
-    elif attrType == DataType.TIME:
+    elif dataType == DataType.TIME:
         t = plug.asMTime(context)
         return t.asUnits(t.uiUnit())
 
-    elif attrType in (DataType.FLOAT2, DataType.FLOAT3, DataType.FLOAT4, DataType.INT2, DataType.INT3):
+    elif dataType in (DataType.FLOAT2, DataType.FLOAT3, DataType.FLOAT4, DataType.INT2, DataType.INT3):
         value = [getPlugValue(plug.child(x), context=context) for x in xrange(plug.numChildren())]
-        if attrType in (DataType.FLOAT3, DataType.INT3):
+        if dataType in (DataType.FLOAT3, DataType.INT3):
             return om2.MVector(value)
         return value
 
-    elif attrType == DataType.MATRIX:       # FIXME: Matrix Doesn't work ! Gotta pass through a MFnMatrixData
+    elif dataType == DataType.MATRIX:       # FIXME: Matrix Doesn't work ! Gotta pass through a MFnMatrixData
         mobj = plug.asMObject(context)
         matrix = om2.MFnMatrixData(mobj).matrix()
         return om2.MMatrix(matrix)
 
-    elif attrType == DataType.MESSAGE:
+    elif dataType == DataType.MESSAGE:
         if plug.isDestination:
             return plug.source().node()
         else:

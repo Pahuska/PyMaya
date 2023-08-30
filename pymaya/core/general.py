@@ -1,5 +1,6 @@
 from functools import partial
 import inspect
+from enum import Enum
 
 from maya.api import OpenMaya as om2
 import maya.cmds as cmds
@@ -260,6 +261,48 @@ class PyObjectFactory(object):
         return _class
 
 
+# FIXME : AttrType class to get them out of AttrCreator and make it easier to handle type comparison ?
+class AttrType(Enum):
+    INVALID = 0
+    COMPOUND = 1
+    ENUM = 2
+    GENERIC = 3
+    MATRIX = 4
+    MESSAGE = 5
+    STRING = 6
+    NUMERIC = 7
+    UNIT = 8
+
+    @classmethod
+    def _attrTypefromData(cls, dataType):
+        dt = api.DataType
+        if dataType in dt.getNumericTypes():
+            return AttrType.NUMERIC
+        elif dataType in dt.getUnitTypes():
+            return AttrType.UNIT
+        elif dataType == dt.ENUM:
+            return AttrType.ENUM
+        elif dataType == dt.MATRIX:
+            return AttrType.MATRIX
+        elif dataType == dt.MESSAGE:
+            return AttrType.MESSAGE
+        elif dataType == dt.STRING:
+            return AttrType.STRING
+        else:
+            return AttrType.INVALID
+
+    @classmethod
+    def _attrTypeFromMObject(cls, MObject):
+        dataType = api.DataType.fromMObject(MObject)
+        if dataType is not api.DataType.INVALID:
+            return cls._attrTypefromData(dataType)
+        apiType = MObject.apiType()
+        if apiType == om2.MFn.kCompoundAttribute:
+            return cls.COMPOUND
+        else:
+            return cls.INVALID
+
+
 class AttrCreator(object):
     """
     Factory Class that builds attribute by using subclasses of MFnAttribute. 
@@ -322,7 +365,7 @@ class AttrCreator(object):
         if 'shortName' not in kwargs:
             kwargs['shortName'] = kwargs['longName']
 
-        attrType = kwargs.pop('attrType', cls._attrTypefromData(kwargs.get('dataType')))
+        attrType = kwargs.pop('attrType', AttrType._attrTypefromData(kwargs.get('dataType')))
         assert attrType, 'Invalid Attribute Type'
 
         # CREATE
@@ -330,7 +373,7 @@ class AttrCreator(object):
         mfn = cls._MFnDict().get(attrType, None)()
         createParams = cls.getCreateParams(attrType, **kwargs)
         dataType = kwargs.get('dataType')
-        if attrType == cls.NUMERIC and dataType in (api.DataType.COLOR, api.DataType.POINT):
+        if attrType == AttrType.NUMERIC and dataType in (api.DataType.COLOR, api.DataType.FLOAT3):
             if dataType == api.DataType.COLOR:
                 mfn.createColor(*createParams)
             else:
@@ -347,7 +390,7 @@ class AttrCreator(object):
         if mfn.array:
             mfn.indexMatters = kwargs.get('indexMatters', False)
 
-        if attrType == cls.ENUM:
+        if attrType == AttrType.ENUM:
             # If the attribute is an ENUM, we need to process the enumNames attribute and add fields one by one
             # Then we set the default value to whatever was provided, or to the min value of the enum if none was given
             assert 'enumNames' in kwargs, 'Enum attributes needs the enumNames parameter'
@@ -373,7 +416,7 @@ class AttrCreator(object):
                 # If not INT, assume it's a STRING
                 mfn.setDefaultByName(dv)
 
-        if attrType in (cls.UNIT, cls.NUMERIC):
+        if attrType in (AttrType.UNIT, AttrType.NUMERIC):
             min = kwargs.get('min')
             max = kwargs.get('max')
             softMin = kwargs.get('softMin')
@@ -387,64 +430,40 @@ class AttrCreator(object):
             if softMax is not None:
                 mfn.setSoftMin(softMax)
 
-        if attrType == cls.STRING and kwargs.get('asFilename', False):
+        if attrType == AttrType.STRING and kwargs.get('asFilename', False):
             mfn.usedAsFilename = True
 
         return mfn
 
     @classmethod
     def _MFnDict(cls):
-        return {cls.COMPOUND: om2.MFnCompoundAttribute,
-                cls.ENUM: om2.MFnEnumAttribute,
-                cls.GENERIC: om2.MFnGenericAttribute,
-                cls.MATRIX: om2.MFnMatrixAttribute,
-                cls.MESSAGE: om2.MFnMessageAttribute,
-                cls.STRING: om2.MFnTypedAttribute,
-                cls.NUMERIC: om2.MFnNumericAttribute,
-                cls.UNIT: om2.MFnUnitAttribute}
-
-    @classmethod
-    def _attrTypefromData(cls, dataType):
-        dt = api.DataType
-        if dataType in dt.getNumericTypes():
-            return cls.NUMERIC
-        elif dataType in dt.getUnitTypes():
-            return cls.UNIT
-        elif dataType == dt.ENUM:
-            return cls.ENUM
-        elif dataType == dt.MATRIX:
-            return cls.MATRIX
-        elif dataType == dt.MESSAGE:
-            return cls.MESSAGE
-        elif dataType == dt.STRING:
-            return cls.STRING
-        else:
-            return cls.INVALID
+        return {AttrType.COMPOUND: om2.MFnCompoundAttribute,
+                AttrType.ENUM: om2.MFnEnumAttribute,
+                AttrType.GENERIC: om2.MFnGenericAttribute,
+                AttrType.MATRIX: om2.MFnMatrixAttribute,
+                AttrType.MESSAGE: om2.MFnMessageAttribute,
+                AttrType.STRING: om2.MFnTypedAttribute,
+                AttrType.NUMERIC: om2.MFnNumericAttribute,
+                AttrType.UNIT: om2.MFnUnitAttribute}
 
     @classmethod
     def getCreateParams(cls, attrType, **kwargs):
         params = [kwargs['longName'], kwargs['shortName']]
         dataType = kwargs.get('dataType', None)
 
-        if attrType in (cls.UNIT, cls.NUMERIC) and dataType not in (api.DataType.COLOR, api.DataType.POINT):
+        if attrType in (AttrType.UNIT, AttrType.NUMERIC) and dataType not in (api.DataType.COLOR, api.DataType.FLOAT3):
             mdata = api.DataType.asMAttrDataConstant(dataType)
             params.append(mdata)
 
-        if attrType in (cls.UNIT, cls.NUMERIC) and dataType not in (api.DataType.COLOR, api.DataType.POINT):
+        if attrType in (AttrType.UNIT, AttrType.NUMERIC) and dataType not in (api.DataType.COLOR, api.DataType.FLOAT3):
             params.append(kwargs.get('defaultValue', 0.0))
 
-        if attrType == cls.STRING:
+        if attrType == AttrType.STRING:
             params.append(om2.MFnData.kString)
             if 'defaultValue' in kwargs:
                 dv = om2.MFnStringData()
                 params.append(dv.create(kwargs['defaultValue']))
         return params
-
-    @classmethod
-    def typeFromString(cls, value):
-        value = value.upper()
-        if hasattr(cls, value):
-            return getattr(cls, value)
 
 
 def _processAttrInput(attr):
@@ -572,7 +591,7 @@ def getAttr(attr, **kwargs):
 
         if plug.isArray and plug.attribute().hasFn(om2.MFn.kTypedAttribute) and not plug.isDynamic:
             plug = plug.elementByLogicalIndex(0)
-            return api.getPlugValue(plug, attrType=datatype, asString=asStr, context=time)
+            return api.getPlugValue(plug, dataType=datatype, asString=asStr, context=time)
 
         elif plug.isArray:
             result = []
@@ -582,7 +601,7 @@ def getAttr(attr, **kwargs):
             while not it.isDone():
                 idx = it.currentItem()
                 p = plug.elementByLogicalIndex(idx)
-                value = api.getPlugValue(p, attrType=datatype, asString=asStr, context=time)
+                value = api.getPlugValue(p, dataType=datatype, asString=asStr, context=time)
                 if not asApi and datatype == api.DataType.MESSAGE and value is not None:
                     value = PyObjectFactory(value)
                 if value is not None:
@@ -590,7 +609,7 @@ def getAttr(attr, **kwargs):
                 it.next()
             return result
         else:
-            return api.getPlugValue(plug, attrType=datatype, asString=asStr, context=time)
+            return api.getPlugValue(plug, dataType=datatype, asString=asStr, context=time)
     else:
         if isinstance(attr, Attribute):
             attr = attr.name(fullDagPath=True)
@@ -1113,6 +1132,7 @@ class Attribute(PyObject):
         super(Attribute, self).__init__(*args, **kwargs)
         self._node = kwargs.get('node', None)
         self._parent = kwargs.get('parent', None)
+        self._dataType = None
         self._attrType = None
 
     def __getitem__(self, item):
@@ -1146,9 +1166,14 @@ class Attribute(PyObject):
         if isinstance(node, DagNode):
             return self.node().apidagpath()
 
+    def dataType(self):
+        if self._dataType is None:
+            self._dataType = api.DataType.fromMObject(self.apimobject())
+        return self._dataType
+
     def attrType(self):
         if self._attrType is None:
-            self._attrType = api.DataType.fromMObject(self.apimobject())
+            self._attrType = AttrType._attrTypeFromMObject(self.apimobject())
         return self._attrType
 
     @classmethod
@@ -1169,6 +1194,18 @@ class Attribute(PyObject):
                                                useFullAttributePath=fullAttrPath, useLongNames=longNames)
         return plugName
 
+    @recycle_mfn
+    def attrName(self, longName=True, includeNode=False, **kwargs):
+        mfn = kwargs['mfn']
+        if longName:
+            name = mfn.name
+        else:
+            name = mfn.shortName
+        if includeNode:
+            return '{}.{}'.format(self.node().name(), name)
+        else:
+            return name
+
     def node(self):
         if self._node is None:
             # FIXME: use PyObjectFactory instead
@@ -1178,12 +1215,12 @@ class Attribute(PyObject):
 
     def set(self, *args, **kwargs):
         if '_datatype' not in kwargs:
-            kwargs['_datatype'] = self._attrType
+            kwargs['_datatype'] = self._dataType
         return setAttr(self, *args, **kwargs)
 
     def get(self, **kwargs):
         if '_datatype' not in kwargs:
-            kwargs['_datatype'] = self._attrType
+            kwargs['_datatype'] = self._dataType
         return getAttr(self, **kwargs)
 
     def connect(self, dAttr, force=False, nextAvailable=False, **kwargs):
@@ -1201,6 +1238,16 @@ class Attribute(PyObject):
         else:
             mfn.name = name
 
+    @recycle_mplug
+    def index(self, **kwargs):
+        mplug = kwargs.get('mplug')
+        return mplug.logicalIndex()
+
+    @recycle_mplug
+    def multiIndices(self, **kwargs):
+        mplug = kwargs['mplug']
+        return mplug.getExistingArrayAttributeIndices()
+
     # PARENT & CHILD
     def _buildAttr(self, name):
         node = self.node()
@@ -1214,6 +1261,13 @@ class Attribute(PyObject):
                                objectType=PyObjectFactory.ATTRIBUTE)
         return attr
 
+    def hasAttr(self, name):
+        try:
+            self.attr(name)
+            return True
+        except:
+            return False
+
     def attr(self, name):
         return getattr(self, name)
 
@@ -1221,7 +1275,10 @@ class Attribute(PyObject):
         if self._parent is not None:
             return self._parent
         mplug = self.apimplug()
-        parentPlug = mplug.parent()
+        try:
+            parentPlug = mplug.parent()
+        except TypeError:
+            return None
         parentObj = parentPlug.attribute()
         return PyObjectFactory(MPlug=parentPlug, MObjectHandle=om2.MObjectHandle(parentObj), node=self.node(),
                                objectType=PyObjectFactory.ATTRIBUTE)
@@ -1306,6 +1363,11 @@ class Attribute(PyObject):
     def isDynamic(self, **kwargs):
         mplug = kwargs['mplug']
         return mplug.isDynamic
+
+    @recycle_mfn
+    def isMulti(self, **kwargs):
+        mfn = kwargs['mfn']
+        return mfn.array
 
     # Inputs and Outputs
     @recycle_mplug
@@ -1434,6 +1496,32 @@ class NumericAttribute(Attribute):
         mfn = kwargs['mfn']
         mfn.setMax(value)
         return mfn
+
+    @recycle_mfn
+    def getMin(self, **kwargs):
+        mfn = kwargs['mfn']
+        if self.hasMin(mfn=mfn):
+            return mfn.getMin()
+        else:
+            return None
+
+    @recycle_mfn
+    def getMax(self, **kwargs):
+        mfn = kwargs['mfn']
+        if self.hasMax(mfn=mfn):
+            return mfn.hasMax(mfn=mfn)
+        else:
+            return None
+
+    @recycle_mfn
+    def getDefault(self, **kwargs):
+        mfn = kwargs['mfn']
+        return mfn.default
+
+    @recycle_mfn
+    def setDefault(self, value, **kwargs):
+        mfn = kwargs['mfn']
+        mfn.default = value
 
 
 class UnitAttribute(NumericAttribute):
