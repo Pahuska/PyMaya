@@ -131,7 +131,12 @@ class DGModifier(AbstractModifier):
 
         if datatype == DataType.FLOAT:
             self.modifier.newPlugValueFloat(plug, value)
-        elif datatype in (DataType.INT, DataType.ENUM):
+        elif datatype == DataType.INT:
+            self.modifier.newPlugValueInt(plug, value)
+        elif datatype == DataType.ENUM:
+            if isinstance(value, str):
+                mfn = om2.MFnEnumAttribute(plug.attribute())
+                value = mfn.fieldValue(value)
             self.modifier.newPlugValueInt(plug, value)
         elif datatype == DataType.BOOL:
             self.modifier.newPlugValueBool(plug, value)
