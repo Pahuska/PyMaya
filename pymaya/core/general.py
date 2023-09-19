@@ -345,15 +345,6 @@ class AttrCreator(object):
     :return: the attribute created
     :rtype: MFnAttribute
     """
-    INVALID = 0
-    COMPOUND = 1
-    ENUM = 2
-    GENERIC = 3
-    MATRIX = 4
-    MESSAGE = 5
-    STRING = 6
-    NUMERIC = 7
-    UNIT = 8
 
     def __new__(cls, *args, **kwargs):
         if len(args):
@@ -658,7 +649,7 @@ def disconnectAttr(*args, **kwargs):
         return None
 
 
-def createNode(nodeType, name=None, parent=om2.MObject.kNullObj, _modifier=None, _isDag=None):
+def createNode(nodeType, name=None, parent=None, _modifier=None, _isDag=None):
     """
     Creates a new node of the given type.
     
@@ -685,6 +676,10 @@ def createNode(nodeType, name=None, parent=om2.MObject.kNullObj, _modifier=None,
         if _isDag is None:
             if 'dagNode' in cmds.nodeType(nodeType, inherited=True, isTypeName=True):
                 mod = api.DagModifier()
+                if parent is None:
+                    parent = om2.MObject.kNullObj
+                elif isinstance(parent, PyObject):
+                    parent = parent.apimobject()
                 kwargs['parent'] = parent
             else:
                 mod = api.DGModifier()
@@ -1090,8 +1085,9 @@ class PyObject(object):
         else:
             return NotImplemented
 
+    # FIXME: this does not work as a classmethod, figure it out.
     @property
-    def __melnode___(self):
+    def __melnode__(self):
         return cmds.nodeType(self.name(fullDagPath=True))
 
     @abstractmethod
@@ -1602,6 +1598,12 @@ class DependNode(PyObject):
     def name(self, fullDagPath=False):
         return self.apimfn().name()
 
+    @recycle_mfn
+    def rename(self, name, **kwargs):
+        mfn = kwargs['mfn']
+        name = mfn.setName(name)
+        return name
+
     def hasAttr(self, name):
         return self.apimfn().hasAttribute(name)
 
@@ -1794,6 +1796,16 @@ class DagNode(DependNode):
             return self.apimfn().fullPathName()
         return self.apimfn().name()
 
+    @recycle_mfn
+    def getParent(self, index=1, **kwargs):
+        mfn = kwargs['mfn']
+
+        if index >= mfn.parentCount():
+            return None
+
+        parent = mfn.parent(index)
+        return PyObjectFactory(MObject=parent)
+
     def _getSelectableObject(self):
         """
         Returns an object that can be added to an MSelectionList
@@ -1932,7 +1944,6 @@ class Transform(DagNode):
         mfn.setTransformation(matrix)
 
     @api.apiUndo
-    @recycle_mfn
     def setMatrix(self, matrix, space=om2.MSpace.kObject):
         doKwargs = {'matrix': matrix, 'space': space}
         undoKwargs = {'matrix':self.getMatrix(space=space), 'space': space}
