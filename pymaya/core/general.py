@@ -1050,6 +1050,8 @@ class PyObject(object):
             kwargs, postKwargs = cls._preCreateVirtual(*args, **kwargs)
             newNode = cls._createVirtual(**kwargs)
             cls._postCreateVirtual(newNode, **postKwargs)
+            if isinstance(newNode, PyObject):   # Here, we're allowing the use of PyMaya in vSubClasses default methods
+                newNode = newNode.name(fullDagPath=True)
             kwargs = cls.getBuildDataFromName(newNode)
             #instance = super(PyObject, cls).__new__(cls, **kwargs)
             instance = super(PyObject, cls).__new__(cls)
