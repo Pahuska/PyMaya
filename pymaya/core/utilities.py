@@ -74,7 +74,7 @@ class Iterator(object):
     def __init__(self, data):
         self.data = data
         self.max = len(data) - 1
-        self._isDone = False
+        self._isDone = False if len(data) else True
         self.n = 0
 
     def __len__(self):

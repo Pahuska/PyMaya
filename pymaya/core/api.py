@@ -7,7 +7,7 @@ import pymaya.apiundo as apiundo
 
 
 @utils.timeit(name='ToApiObject', log=True, verbose=False)
-def toApiObject(nodeName):
+def toApiObject(nodeName, asMObject=False):
     if nodeName is None:
         return None
 
@@ -20,17 +20,26 @@ def toApiObject(nodeName):
     if '.' in nodeName:     # In that case we either have a Plug or a Component
         try:
             plug = sel.getPlug(0)
-            return plug
+            if asMObject:
+                return plug.attribute()
+            else:
+                return plug
         except TypeError:
             try:
                 comp = sel.getComponent(0)
-                return comp
+                if asMObject:
+                    return comp[1]
+                else:
+                    return comp
             except RuntimeError:
                 return None
     else:       # Figure out if it's a DAG or DG
         try:
             dag = sel.getDagPath(0)
-            return dag
+            if asMObject:
+                return dag.node()
+            else:
+                return dag
         except TypeError:
             obj = sel.getDependNode(0)
             return obj

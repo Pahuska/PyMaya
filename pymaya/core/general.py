@@ -8,7 +8,9 @@ import maya.cmds as cmds
 from pymaya.py2x3 import _enum, xrange, add_metaclass
 import pymaya.core.api as api
 import pymaya.core.utilities as utils
+from pymaya import apiundo
 from abc import ABCMeta, abstractmethod
+import json
 
 
 class UndoChunk(object):
@@ -676,12 +678,9 @@ def createNode(nodeType, name=None, parent=None, _modifier=None, _isDag=None):
         if _isDag is None:
             if 'dagNode' in cmds.nodeType(nodeType, inherited=True, isTypeName=True):
                 mod = api.DagModifier()
-                if parent is None:
-                    parent = om2.MObject.kNullObj
-                elif isinstance(parent, PyObject):
-                    parent = parent.apimobject()
-                kwargs['parent'] = parent
+                _isDag = True
             else:
+                _isDag = False
                 mod = api.DGModifier()
         elif _isDag:
             mod = api.DagModifier()
@@ -691,6 +690,17 @@ def createNode(nodeType, name=None, parent=None, _modifier=None, _isDag=None):
     else:
         mod = _modifier
         doIt = False
+
+    if parent is not None:
+        # if a parent is provided, we need to make sure we're passing
+        # an MObject to the modifier
+        if isinstance(parent, PyObject):
+            parent = parent.apimobject()
+        elif isinstance(parent, str):
+            parent = api.toApiObject(parent, asMObject=True)
+
+        kwargs['parent'] = parent
+
     obj = mod.createNode(nodeType, **kwargs)
     if doIt:
         mod.doIt()
@@ -836,6 +846,24 @@ def listType(nodeType, asApi=False):
     return PyObjectFactory.fromMSelectionList(sel)
 
 
+def isType(node, nodeType, exactType=False):
+    if not isinstance(node, PyObject):
+        node = PyObjectFactory(node)
+
+    if isinstance(nodeType, int):
+        mobject = node.apimobject()
+        if exactType:
+            return mobject.apiType() == nodeType
+        else:
+            return mobject.hasFn(nodeType)
+
+    if isinstance(nodeType, str):
+        if exactType:
+            return cmds.objectType(isAType=nodeType)
+        else:
+            return cmds.objectType(isType=nodeType)
+
+
 def ls(*args, **kwargs):
     ls = cmds.ls(*args, **kwargs)
     it = utils.Iterator(ls)
@@ -856,13 +884,18 @@ def doDelete(*args, **kwargs):
     multMod = api.MultiModifier()
     while not it.isDone():
         item = it.currentItem()
+        print(item)
         if not isinstance(item, PyObject):
             item = PyObjectFactory(item)
 
         handle = item.apimobjecthandle()
         if handle.isValid():
             modifier = om2.MDGModifier()
-            modifier.deleteNode(handle.object())
+            mobject = handle.object()
+            if mobject.hasFn(om2.MFn.kAttribute):
+                modifier.removeAttribute(mobject)
+            else:
+                modifier.deleteNode(handle.object())
             modifier.doIt()
             multMod.append(modifier)
         it.next()
@@ -996,6 +1029,27 @@ def transform(node, translate=None, rotate=None, scale=None, shear=None, matrix=
     return modifier
 
 
+# Just for convenience. These function all work fine by using API & PyMaya directly into the CMDS thing
+def parentConstraint(*args, **kwargs):
+    return PyObjectFactory(cmds.parentConstraint(*args, **kwargs))
+
+
+def scaleConstraint(*args, **kwargs):
+    return PyObjectFactory(cmds.scaleConstraint(*args, **kwargs))
+
+
+def orientConstraint(*args, **kwargs):
+    return PyObjectFactory(cmds.orientConstraint(*args, **kwargs))
+
+
+def pointConstraint(*args, **kwargs):
+    return PyObjectFactory(cmds.pointConstraint(*args, **kwargs))
+
+
+def aimConstraint(*args, **kwargs):
+    return PyObjectFactory(cmds.aimConstraint(*args, **kwargs))
+
+
 # RECYCLE DECORATORS : provide the ability to reuse some api object like MFn & MIt to avoid recreating them
 def recycle_mfn(func):
     def wrapped(*args, **kwargs):
@@ -1079,7 +1133,11 @@ class PyObject(object):
         return '{} <{}>'.format(self.name(), self.__class__.__name__)
 
     def __str__(self):
-        return self.name()
+        name = self.name()
+        if utils.uniqueObjExists(name):
+            return self.name()
+        else:
+            return self.name(fullDagPath=True)
 
     def __eq__(self, other):
         if isinstance(other, PyObject):
@@ -1571,6 +1629,7 @@ class CompoundAttribute(Attribute):
 class DependNode(PyObject):
     _mfnClass = om2.MFnDependencyNode
     _mfnConstant = om2.MFn.kDependencyNode
+    _typeName = ''
 
     def __init__(self, *args, **kwargs):
         super(DependNode, self).__init__(*args, **kwargs)
@@ -1588,6 +1647,10 @@ class DependNode(PyObject):
     def apimfn(self):
         return self._mfnClass(self.apimobject())
 
+    @property
+    def typeName(self):
+        return self.apimfn().typeName
+
     @classmethod
     def getBuildDataFromName(cls, name):
         mobj = api.toApiObject(name)
@@ -1598,7 +1661,8 @@ class DependNode(PyObject):
 
     # OTHER DEFAULT METHODS
     def name(self, fullDagPath=False):
-        return self.apimfn().name()
+        mfn = om2.MFnDependencyNode(self.apimobject())
+        return mfn.name()
 
     @recycle_mfn
     def rename(self, name, **kwargs):
@@ -1607,10 +1671,11 @@ class DependNode(PyObject):
         return name
 
     def hasAttr(self, name):
-        return self.apimfn().hasAttribute(name)
+        apimfn = om2.MFnDependencyNode(self.apimobject())
+        return apimfn.hasAttribute(name)
 
     def _buildAttr(self, name):
-        apimfn = self.apimfn()
+        apimfn = om2.MFnDependencyNode(self.apimobject())
         if apimfn.hasAttribute(name):
             plug = apimfn.findPlug(name, False)
             attr = PyObjectFactory(MPlug=plug, MObjectHandle=om2.MObjectHandle(plug.attribute()), node=self,
@@ -1620,7 +1685,8 @@ class DependNode(PyObject):
             return None
 
     def attr(self, name):
-        return getattr(self, name)
+        if self.hasAttr(name):
+            return self._buildAttr(name)
 
     def createAttr(self, *args, **kwargs):
         """
@@ -1771,6 +1837,7 @@ class DependNode(PyObject):
 class DagNode(DependNode):
     _mfnClass = om2.MFnDagNode
     _mfnConstant = om2.MFn.kDagNode
+    _typeName = 'dagNode'
 
     def __init__(self, *args, **kwargs):
         super(DagNode, self).__init__(*args, **kwargs)
@@ -1794,9 +1861,10 @@ class DagNode(DependNode):
 
     # OTHER DEFAULT METHODS
     def name(self, fullDagPath=False):
+        mfn = om2.MFnDagNode(self.apimobject())
         if fullDagPath:
-            return self.apimfn().fullPathName()
-        return self.apimfn().name()
+            return mfn.fullPathName()
+        return mfn.name()
 
     @recycle_mfn
     def getParent(self, index=1, **kwargs):
@@ -1807,6 +1875,15 @@ class DagNode(DependNode):
 
         parent = mfn.parent(index)
         return PyObjectFactory(MObject=parent)
+
+    @recycle_mfn
+    def getChildren(self, **kwargs):
+        mfn = kwargs['mfn']
+        children = []
+        for x in range(mfn.childCount()):
+            children.append(PyObjectFactory(MObject=mfn.child(x)))
+        return children
+        # TODO : check if we need to reimplement allDescendant flag (probably yes)
 
     def _getSelectableObject(self):
         """
@@ -1857,6 +1934,7 @@ class DagNode(DependNode):
 class Transform(DagNode):
     _mfnClass = om2.MFnTransform
     _mfnConstant = om2.MFn.kTransform
+    _typeName = 'transform'
 
     def __init__(self, *args, **kwargs):
         super(Transform, self).__init__(*args, **kwargs)
@@ -1885,15 +1963,45 @@ class Transform(DagNode):
         # Get and MObjectHandle for this DagPath
         sel = om2.MSelectionList()
         sel.add(dag)
-        objHandle = om2.MObjectHandle(sel.getDependNode(0))
-        return PyObjectFactory(MObjectHandle=objHandle, MDagPath=dag)
+        return PyObjectFactory(MObject=sel.getDependNode(0), MDagPath=dag)
+
+    def getShapes(self):
+        shapes = []
+        for x in range(self.numShape()):
+            shapes.append(self.getShape(x))
+        return shapes
 
     def _buildAttr(self, name, checkShape=True):
-        attr = super(DagNode, self)._buildAttr(name=name)
+        attr = super()._buildAttr(name=name)
         if attr is None and checkShape and self.numShape():
             return getattr(self.getShape(), name)
         else:
             return attr
+
+    def attr(self, name, checkShape=True):
+        if self.hasAttr(name, checkShape=False):
+            return self._buildAttr(name, False)
+        elif checkShape:
+            numShape = self.numShape()
+            if numShape:
+                for x in range(self.numShape()):
+                    shape = self.getShape(x)
+                    if shape.hasAttr(name):
+                        return shape.attr(name)
+
+    def hasAttr(self, name, checkShape=True):
+        result = super().hasAttr(name)
+        if result:
+            return result
+        elif checkShape:
+            numShape = self.numShape()
+            if numShape:
+                for x in range(self.numShape()):
+                    shape = self.getShape(x)
+                    if shape.hasAttr(name):
+                        return True
+        else:
+            return False
 
     @classmethod
     def _create(cls, name=None, parent=om2.MObject.kNullObj):
@@ -1969,6 +2077,7 @@ class Transform(DagNode):
 
 class Joint(Transform):
     _mfnConstant = om2.MFn.kJoint
+    _typeName = 'joint'
 
     def __init__(self, *args, **kwargs):
         super(Joint, self).__init__(*args, **kwargs)
@@ -2020,6 +2129,7 @@ class Joint(Transform):
 class ObjectSet(DependNode):
     _mfnClass = om2.MFnSet
     _mfnConstant = om2.MFn.kSet
+    _typeName = 'objectSet'
 
     def __init__(self, *args, **kwargs):
         super(ObjectSet, self).__init__(*args, **kwargs)
@@ -2200,6 +2310,7 @@ class ParameterFactory(object):
 class Mesh(GeometryShape):
     _mfnClass = om2.MFnMesh
     _mfnConstant = om2.MFn.kMesh
+    _typeName = 'mesh'
 
     def __init__(self, *args, **kwargs):
         super(Mesh, self).__init__(*args, **kwargs)
@@ -2407,6 +2518,7 @@ class Mesh(GeometryShape):
 class NurbsCurve(GeometryShape):
     _mfnClass = om2.MFnNurbsCurve
     _mfnConstant = om2.MFn.kNurbsCurve
+    _typeName = 'nurbsCurve'
 
     def __init__(self, *args, **kwargs):
         super(NurbsCurve, self).__init__(*args, **kwargs)
@@ -2416,7 +2528,7 @@ class NurbsCurve(GeometryShape):
         """
         Create a new Mesh. [NOT UNDOABLE]
 
-        see MFnMesh.create for a list of valid parameters
+        see MFnNurbsCurve.create for a list of valid parameters
         :return: 
         """
         parent = kwargs.get('parent', om2.MObject.kNullObj)
@@ -2427,6 +2539,7 @@ class NurbsCurve(GeometryShape):
         obj = mfn.create(*args, **kwargs)
         return PyObjectFactory(MObject=obj)
 
+    # TODO: apply test done in undoable_nurbsCurve and try the same for other GeoShapes
     @classmethod
     def create(cls, *args, **kwargs):
         """
@@ -2435,7 +2548,28 @@ class NurbsCurve(GeometryShape):
         :return: The mesh newly created
         :rtype:
         """
-        return cls._create(*args, **kwargs)
+        parent = kwargs.get('parent', om2.MObject.kNullObj)
+        name = kwargs.get('name', None)
+
+        # The idea here is to create an empty curve with one modifier
+        # that we'll use for undoing the whole thing, and then modify
+        # it with another
+        modifier = api.DagModifier()
+        curve = createNode('nurbsCurve', name=name, parent=parent, _modifier=modifier)
+        modifier.doIt()
+
+        edit_modifier = api.DagModifier()
+        plug = curve.attr('create').apimplug()
+        # We're creating a nurbsCurve data object, and fill it with
+        # the given args with the help of the MFnNurbsCurve
+        data = om2.MFnNurbsCurveData().create()
+        mfn = om2.MFnNurbsCurve()
+        mfn.create(*args, parent=data)
+        edit_modifier.newPlugValue(plug, data)
+        edit_modifier.doIt()
+
+        apiundo.commit(undo=modifier.undoIt, redo=modifier.doIt)
+        return curve
 
     @property
     def cv(self):
@@ -2652,18 +2786,15 @@ class NurbsCurve(GeometryShape):
 
     @property
     def isOpen(self):
-        if self.form == self._mfnClass.kOpen:
-            return True
+        return self.form == self._mfnClass.kOpen
 
     @property
     def isClosed(self):
-        if self.form == self._mfnClass.kClosed:
-            return True
+        return self.form == self._mfnClass.kClosed
 
     @property
     def isPeriodic(self):
-        if self.form == self._mfnClass.kPeriodic:
-            return True
+        return self.form == self._mfnClass.kPeriodic
 
     @property
     def numCVs(self):
@@ -2685,10 +2816,28 @@ class NurbsCurve(GeometryShape):
         mfn = self.apimfn()
         return mfn.knotDomain
 
+    @recycle_mfn
+    def getCurveData(self, space=om2.MSpace.kObject, **kwargs):
+        mfn = kwargs['mfn']
+        data = {'degree': mfn.degree,
+                'form': mfn.form,
+                'cvs': mfn.cvPositions(space=space),
+                'knots': mfn.knots()}
+        return data
+
+    @recycle_mfn
+    def getCurveJsonData(self, **kwargs):
+        mfn = kwargs['mfn']
+        data = self.getCurveData(mfn=mfn)
+        data['cvs'] = [(p.x, p.y, p.z) for p in data['cvs']]
+        data['knots'] = list(data['knots'])
+        return json.dumps(data, sort_keys=True, indent=4)
+
 
 class NurbsSurface(GeometryShape):
     _mfnClass = om2.MFnNurbsSurface
     _mfnConstant = om2.MFn.kNurbsSurface
+    _typeName = 'nurbsSurface'
 
     def __init__(self, *args, **kwargs):
         super(NurbsSurface, self).__init__(*args, **kwargs)
@@ -2971,6 +3120,7 @@ class NurbsSurface(GeometryShape):
 class LatticeShape(GeometryShape):
     _mfnClass = om2.MFnDagNode
     _mfnConstant = om2.MFn.kLattice
+    _typeName = 'latticeShape'
 
     def __init__(self, *args, **kwargs):
         super(LatticeShape, self).__init__(*args, **kwargs)
