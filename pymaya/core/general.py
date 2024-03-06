@@ -602,7 +602,10 @@ def getAttr(attr, **kwargs):
                 it.next()
             return result
         else:
-            return api.getPlugValue(plug, dataType=datatype, asString=asStr, context=time)
+            value = api.getPlugValue(plug, dataType=datatype, asString=asStr, context=time)
+            if not asApi and datatype == api.DataType.MESSAGE and value is not None:
+                value = PyObjectFactory(value)
+            return value
     else:
         if isinstance(attr, Attribute):
             attr = attr.name(fullDagPath=True)
@@ -791,9 +794,17 @@ def parent(*args, **kwargs):
         doIt = False
         modifier = _modifier
 
+    is_world = False
     if world or len(args) == 1:
         objects = args
         pObj = om2.MObject.kNullObj
+        is_world = True
+
+    elif args[-1] is None:
+        objects = args[:-1]
+        pObj = om2.MObject.kNullObj
+        is_world = True
+
     else:
         objects = args[:-1]
         parent = args[-1]
@@ -813,13 +824,18 @@ def parent(*args, **kwargs):
             pyObj = obj
         else:
             pyObj = PyObjectFactory(obj)
-        obj = obj.apimobject()
+        obj = pyObj.apimobject()
         modifier.reparentNode(obj, pObj)
         if not relative:
             mtx = pyObj.getMatrix(space=om2.MSpace.kWorld)
-            pyPObj = PyObjectFactory(pObj)
-            pim = pyPObj.worldInverseMatrix.get()
-            transform(pyObj, matrix=mtx * pim, _modifier=modifier, objectSpace=True)
+            if is_world:
+                new_mtx = mtx
+            else:
+                pyPObj = PyObjectFactory(pObj)
+                pim = pyPObj.worldInverseMatrix.get()
+                new_mtx = mtx * pim
+
+            transform(pyObj, matrix=new_mtx, _modifier=modifier, objectSpace=True)
         it.next()
 
     if doIt:
@@ -1031,23 +1047,23 @@ def transform(node, translate=None, rotate=None, scale=None, shear=None, matrix=
 
 # Just for convenience. These function all work fine by using API & PyMaya directly into the CMDS thing
 def parentConstraint(*args, **kwargs):
-    return PyObjectFactory(cmds.parentConstraint(*args, **kwargs))
+    return PyObjectFactory(cmds.parentConstraint(*args, **kwargs)[0])
 
 
 def scaleConstraint(*args, **kwargs):
-    return PyObjectFactory(cmds.scaleConstraint(*args, **kwargs))
+    return PyObjectFactory(cmds.scaleConstraint(*args, **kwargs)[0])
 
 
 def orientConstraint(*args, **kwargs):
-    return PyObjectFactory(cmds.orientConstraint(*args, **kwargs))
+    return PyObjectFactory(cmds.orientConstraint(*args, **kwargs)[0])
 
 
 def pointConstraint(*args, **kwargs):
-    return PyObjectFactory(cmds.pointConstraint(*args, **kwargs))
+    return PyObjectFactory(cmds.pointConstraint(*args, **kwargs)[0])
 
 
 def aimConstraint(*args, **kwargs):
-    return PyObjectFactory(cmds.aimConstraint(*args, **kwargs))
+    return PyObjectFactory(cmds.aimConstraint(*args, **kwargs)[0])
 
 
 # RECYCLE DECORATORS : provide the ability to reuse some api object like MFn & MIt to avoid recreating them
@@ -1866,15 +1882,16 @@ class DagNode(DependNode):
             return mfn.fullPathName()
         return mfn.name()
 
-    @recycle_mfn
-    def getParent(self, index=1, **kwargs):
-        mfn = kwargs['mfn']
+    def getParent(self, index=1):
+        if index == 0:
+            return self
 
-        if index >= mfn.parentCount():
-            return None
-
-        parent = mfn.parent(index)
-        return PyObjectFactory(MObject=parent)
+        mobj = self.apimobject()
+        for x in range(index):
+            mobj = om2.MFnDagNode(mobj).parent(0)
+            if mobj.apiType() == om2.MFn.kWorld:
+                return None
+        return PyObjectFactory(MObject=mobj)
 
     @recycle_mfn
     def getChildren(self, **kwargs):
