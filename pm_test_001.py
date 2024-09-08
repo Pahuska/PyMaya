@@ -4,7 +4,7 @@ import pymaya.core.utilities as utils
 #import pymaya.apiundo as apiundo
 
 from maya.api import OpenMaya as om2
-
+from maya import OpenMaya as om
 # PERF TESTING
 '''
 import time
@@ -28,3 +28,5 @@ for x in range(10000):
 end = time.time()
 print('PYMEL :', end - st)
 '''
+
+print(om.MFnBase.typeString(om2.MFn.kMultiplyDivide))
