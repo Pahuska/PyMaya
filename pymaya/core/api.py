@@ -7,7 +7,7 @@ import pymaya.apiundo as apiundo
 
 
 @utils.timeit(name='ToApiObject', log=True, verbose=False)
-def toApiObject(nodeName, asMObject=False):
+def toApiObject(nodeName:str, asMObject:bool=False):
     if nodeName is None:
         return None
 
